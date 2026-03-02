@@ -7,7 +7,7 @@
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   margin-left: 4px;
   margin-right: 16px;
 }
@@ -83,14 +83,14 @@
 
 /* Avatar Styles */
 .chat-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
   background: var(--panel-strong);
   display: grid;
   place-items: center;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
   flex-shrink: 0;
   align-self: flex-end; /* Align with last message in group */
   margin-bottom: 4px; /* Optical alignment */
@@ -133,8 +133,7 @@ img.chat-avatar {
   padding: 10px 14px;
   box-shadow: none;
   transition:
-    background 150ms ease-out,
-    border-color 150ms ease-out;
+    background 150ms ease-out;
   max-width: 100%;
   word-wrap: break-word;
 }
@@ -246,7 +245,6 @@ img.chat-avatar {
 /* Light mode: restore borders */
 :root[data-theme="light"] .chat-bubble {
   border-color: var(--border);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
 .chat-bubble:hover {
