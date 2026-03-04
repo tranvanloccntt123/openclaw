@@ -239,6 +239,7 @@ const log = createSubsystemLogger("internal-hooks");
  * ```
  */
 export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {
+  log.info(`[Hook Registered] Event: ${eventKey}`);
   if (!handlers.has(eventKey)) {
     handlers.set(eventKey, []);
   }
@@ -299,6 +300,10 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
 
   const allHandlers = [...typeHandlers, ...specificHandlers];
+
+  log.info(
+    `[Hook Triggered] Event: ${event.type}:${event.action} | Session: ${event.sessionKey} | Handlers: ${allHandlers.length}`,
+  );
 
   if (allHandlers.length === 0) {
     return;

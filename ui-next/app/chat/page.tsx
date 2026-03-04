@@ -74,7 +74,9 @@ const styles = {
     padding: "0 12px",
     fontSize: 12,
     fontWeight: 500,
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     borderRadius: "var(--radius-md)",
     background: "var(--secondary)",
     color: "var(--text)",
@@ -97,7 +99,9 @@ const styles = {
   sessionRow: {
     padding: "8px 10px",
     borderRadius: "var(--radius-md)",
-    border: "1px solid transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "transparent",
     background: "transparent",
     cursor: "pointer",
     textAlign: "left" as const,
@@ -438,16 +442,16 @@ export default function ChatPage() {
     }
 
     try {
-      const res = await request<{ sessionKey: string }>("sessions.reset", {
-        key: "agent:main:main",
+      const res = await request<{ key: string }>("sessions.reset", {
+        key: `agent:main:${new Date().getTime()}`,
       });
-      if (res.sessionKey) {
+      if (res.key) {
         // Clear all chat state BEFORE switching session
         // to prevent loadChatHistory from overwriting with old data
         setMessages([]);
         setChatStream(null);
         setError(null);
-        setSelectedSessionKey(res.sessionKey);
+        setSelectedSessionKey(res.key);
         void loadSessions();
       }
     } catch (err) {
@@ -455,6 +459,38 @@ export default function ChatPage() {
       alert(err instanceof Error ? err.message : "Failed to create session");
     }
   }, [state, request, loadSessions]);
+
+  const handleDeleteSession = useCallback(
+    async (key: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!window.confirm("Are you sure you want to delete this session?")) {
+        return;
+      }
+
+      if (state !== "connected") {
+        alert("Not connected to gateway");
+        return;
+      }
+
+      try {
+        const res = await request<{ deleted: boolean }>("sessions.delete", {
+          key,
+        });
+        if (res.deleted) {
+          if (selectedSessionKey === key) {
+            setSelectedSessionKey(null);
+            setMessages([]);
+            setChatStream(null);
+            setError(null);
+          }
+          void loadSessions();
+        }
+      } catch (err) {
+        alert(err instanceof Error ? err.message : "Failed to delete session");
+      }
+    },
+    [state, request, selectedSessionKey, loadSessions],
+  );
 
   useEffect(() => {
     if (state === "connected") {
@@ -522,24 +558,43 @@ export default function ChatPage() {
                 sessions.map((session) => {
                   const isActive = selectedSessionKey === session.key;
                   return (
-                    <button
+                    <div
                       key={session.key}
-                      type="button"
                       style={{
                         ...styles.sessionRow,
                         ...(isActive ? styles.sessionRowActive : {}),
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
                       }}
                       onClick={() => setSelectedSessionKey(session.key)}
                     >
-                      <div style={styles.sessionTitle}>
-                        {session.label || session.displayName || session.key}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={styles.sessionTitle}>
+                          {session.label || session.displayName || session.key}
+                        </div>
+                        <div style={styles.sessionSub}>
+                          {session.updatedAt
+                            ? formatRelativeTimestamp(session.updatedAt)
+                            : "No activity"}
+                        </div>
                       </div>
-                      <div style={styles.sessionSub}>
-                        {session.updatedAt
-                          ? formatRelativeTimestamp(session.updatedAt)
-                          : "No activity"}
-                      </div>
-                    </button>
+                      <button
+                        title="Delete Session"
+                        onClick={(e) => handleDeleteSession(session.key, e)}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "var(--muted)",
+                          cursor: "pointer",
+                          padding: "4px",
+                          fontSize: "14px",
+                          lineHeight: 1,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
                   );
                 })
               )}

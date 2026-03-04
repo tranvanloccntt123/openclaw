@@ -1,4 +1,7 @@
 import { Node } from "@xyflow/react";
+import { useEffect, useState } from "react";
+import type { SessionsListResult, GatewaySessionRow } from "@/lib/types";
+import { useGateway } from "@/lib/use-gateway";
 import { NodeData } from "./custom-nodes";
 
 const styles = {
@@ -90,6 +93,21 @@ interface NodeConfigPanelProps {
 }
 
 export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanelProps) {
+  const { state, request } = useGateway();
+  const [sessions, setSessions] = useState<GatewaySessionRow[]>([]);
+
+  useEffect(() => {
+    if (state === "connected") {
+      request<SessionsListResult>("sessions.list", {})
+        .then((res) => {
+          setSessions(res.sessions ?? []);
+        })
+        .catch((err) => {
+          console.error("Failed to load sessions:", err);
+        });
+    }
+  }, [state, request]);
+
   if (!node) {
     return null;
   }
@@ -148,12 +166,18 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
           <>
             <div style={styles.field}>
               <span style={styles.label}>Target Session Key</span>
-              <input
-                style={styles.input}
-                placeholder="e.g. agent:main"
+              <select
+                style={styles.select}
                 value={(data.targetSessionKey as string) || ""}
                 onChange={(e) => handleChange("targetSessionKey", e.target.value)}
-              />
+              >
+                <option value="">-- Select a session --</option>
+                {sessions.map((s) => (
+                  <option key={s.key} value={s.key}>
+                    {s.label || s.displayName || s.key}
+                  </option>
+                ))}
+              </select>
             </div>
             <div style={styles.field}>
               <span style={styles.label}>Match Keyword (Optional)</span>

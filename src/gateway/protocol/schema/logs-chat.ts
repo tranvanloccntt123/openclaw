@@ -6,6 +6,7 @@ export const LogsTailParamsSchema = Type.Object(
     cursor: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
     maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
+    target: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("cache-trace")])),
   },
   { additionalProperties: false },
 );

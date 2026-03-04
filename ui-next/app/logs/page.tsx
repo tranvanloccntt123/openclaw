@@ -50,12 +50,37 @@ function normalizeLevel(value: unknown): LogLevel | null {
   return LEVELS.includes(lowered) ? lowered : null;
 }
 
-function parseLogLine(line: string): LogEntry {
+function parseLogLine(line: string, target: "main" | "cache-trace"): LogEntry {
   if (!line.trim()) {
     return { raw: line, message: line };
   }
   try {
     const obj = JSON.parse(line) as Record<string, unknown>;
+
+    if (target === "cache-trace") {
+      const stage = typeof obj.stage === "string" ? obj.stage : "cache-trace";
+      let summary = "";
+      if (typeof obj.prompt === "string") {
+        summary = `Prompt: ${obj.prompt.substring(0, 150)}...`;
+      } else if (Array.isArray(obj.messages)) {
+        summary = `Messages: ${obj.messages.length} turns`;
+      } else if (obj.error) {
+        summary = `Error: ${JSON.stringify(obj.error)}`;
+      } else if (obj.system) {
+        summary = `System prompt updated`;
+      } else {
+        summary = `Event: ${stage}`;
+      }
+      return {
+        raw: line,
+        time: typeof obj.ts === "string" ? obj.ts : null,
+        level: obj.error ? "error" : "info",
+        subsystem: stage,
+        message: summary,
+        meta: obj,
+      };
+    }
+
     const meta =
       obj && typeof obj._meta === "object" && obj._meta !== null
         ? (obj._meta as Record<string, unknown>)
@@ -201,6 +226,16 @@ const styles = {
     borderRadius: "var(--radius-md)",
     color: "var(--text)",
   } as React.CSSProperties,
+  select: {
+    height: 32,
+    padding: "0 10px",
+    fontSize: 13,
+    background: "var(--bg)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-md)",
+    color: "var(--text)",
+    minWidth: "150px",
+  } as React.CSSProperties,
   checkbox: {
     width: 16,
     height: 16,
@@ -221,7 +256,9 @@ const styles = {
     fontWeight: 500,
     borderRadius: 9999,
     cursor: "pointer",
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     background: "var(--bg)",
     transition: "background 0.15s, border-color 0.15s",
   } as React.CSSProperties,
@@ -265,6 +302,7 @@ const styles = {
     borderBottom: "1px solid var(--border)",
     fontSize: 12,
     lineHeight: 1.5,
+    cursor: "pointer",
   } as React.CSSProperties,
   logTime: {
     fontFamily: "var(--mono)",
@@ -287,6 +325,19 @@ const styles = {
     color: "var(--text)",
     wordBreak: "break-word" as const,
   } as React.CSSProperties,
+  expandedPayload: {
+    gridColumn: "1 / -1",
+    background: "var(--bg-subtle)",
+    padding: 12,
+    marginTop: 4,
+    borderRadius: 6,
+    fontFamily: "var(--mono)",
+    fontSize: 11,
+    whiteSpace: "pre-wrap" as const,
+    color: "var(--text)",
+    border: "1px solid var(--border)",
+    overflowX: "auto" as const,
+  } as React.CSSProperties,
 };
 
 // ============================================
@@ -294,15 +345,23 @@ const styles = {
 // ============================================
 
 function LogRow({ entry }: { entry: LogEntry }) {
+  const [expanded, setExpanded] = useState(false);
   const levelColor = entry.level ? LEVEL_COLORS[entry.level] : "var(--muted)";
 
   return (
-    <div style={styles.logRow}>
-      <div style={styles.logTime}>{formatTime(entry.time)}</div>
-      <div style={{ ...styles.logLevel, color: levelColor }}>{entry.level ?? ""}</div>
-      <div style={styles.logSubsystem}>{entry.subsystem ?? ""}</div>
-      <div style={styles.logMessage}>{entry.message ?? entry.raw}</div>
-    </div>
+    <>
+      <div style={styles.logRow} onClick={() => setExpanded(!expanded)}>
+        <div style={styles.logTime}>{formatTime(entry.time)}</div>
+        <div style={{ ...styles.logLevel, color: levelColor }}>{entry.level ?? ""}</div>
+        <div style={styles.logSubsystem}>{entry.subsystem ?? ""}</div>
+        <div style={styles.logMessage}>{entry.message ?? entry.raw}</div>
+        {expanded && (
+          <div style={styles.expandedPayload}>
+            {JSON.stringify(entry.meta ?? JSON.parse(entry.raw), null, 2)}
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -364,6 +423,8 @@ export default function LogsPage() {
   const [file, setFile] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
 
+  const [target, setTarget] = useState<"main" | "cache-trace">("main");
+
   const [filterText, setFilterText] = useState("");
   const [levelFilters, setLevelFilters] = useState<Record<LogLevel, boolean>>({
     trace: true,
@@ -386,8 +447,8 @@ export default function LogsPage() {
     setError(null);
 
     try {
-      const res = await request<LogsTailResult>("logs.tail", {});
-      const parsedEntries = (res.lines || []).map(parseLogLine);
+      const res = await request<LogsTailResult>("logs.tail", { target });
+      const parsedEntries = (res.lines || []).map((line) => parseLogLine(line, target));
       setEntries(parsedEntries);
       setFile(res.file ?? null);
       setTruncated(res.truncated ?? false);
@@ -396,13 +457,13 @@ export default function LogsPage() {
     } finally {
       setLoading(false);
     }
-  }, [state, request]);
+  }, [state, request, target]);
 
   useEffect(() => {
     if (state === "connected") {
       void loadLogs();
     }
-  }, [state, loadLogs]);
+  }, [state, loadLogs, target]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -427,7 +488,7 @@ export default function LogsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `openclaw-logs-${Date.now()}.txt`;
+    a.download = `openclaw-${target}-${Date.now()}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -435,7 +496,7 @@ export default function LogsPage() {
   // Filter entries
   const needle = filterText.trim().toLowerCase();
   const filtered = entries.filter((entry) => {
-    if (entry.level && !levelFilters[entry.level]) {
+    if (entry.level && !levelFilters[entry.level] && target === "main") {
       return false;
     }
     return matchesFilter(entry, needle);
@@ -458,14 +519,14 @@ export default function LogsPage() {
           Logs
         </h1>
         <p style={{ color: "var(--muted)", marginTop: 6, marginBottom: 0 }}>
-          View and search gateway logs in real time.
+          View and search gateway logs or AI queries cache trace in real time.
         </p>
       </div>
 
       <div style={styles.card}>
         <div style={styles.cardHeader}>
           <div>
-            <div style={styles.cardTitle}>Gateway Logs</div>
+            <div style={styles.cardTitle}>Gateway Logs Viewer</div>
             <div style={styles.cardSub}>
               {state === "connected"
                 ? `${filtered.length} entries`
@@ -486,6 +547,17 @@ export default function LogsPage() {
 
         <div style={styles.filters}>
           <label style={styles.field}>
+            <span style={styles.fieldLabel}>Log Source</span>
+            <select
+              style={styles.select}
+              value={target}
+              onChange={(e) => setTarget(e.target.value as "main" | "cache-trace")}
+            >
+              <option value="main">Main Logs</option>
+              <option value="cache-trace">Cache Trace (AI requests)</option>
+            </select>
+          </label>
+          <label style={styles.field}>
             <span style={styles.fieldLabel}>Filter</span>
             <input
               style={styles.input}
@@ -505,16 +577,18 @@ export default function LogsPage() {
           </label>
         </div>
 
-        <div style={styles.chipRow}>
-          {LEVELS.map((level) => (
-            <LevelChip
-              key={level}
-              level={level}
-              active={levelFilters[level]}
-              onToggle={(enabled) => handleLevelToggle(level, enabled)}
-            />
-          ))}
-        </div>
+        {target === "main" && (
+          <div style={styles.chipRow}>
+            {LEVELS.map((level) => (
+              <LevelChip
+                key={level}
+                level={level}
+                active={levelFilters[level]}
+                onToggle={(enabled) => handleLevelToggle(level, enabled)}
+              />
+            ))}
+          </div>
+        )}
 
         {file && <div style={{ ...styles.muted, marginTop: 10 }}>File: {file}</div>}
 
@@ -529,7 +603,7 @@ export default function LogsPage() {
         <div ref={streamRef} style={styles.logStream}>
           {filtered.length === 0 ? (
             <div style={{ ...styles.muted, padding: 12 }}>
-              {loading ? "Loading logs..." : "No log entries."}
+              {loading ? "Loading logs..." : "No log entries found for this source."}
             </div>
           ) : (
             filtered.map((entry, i) => <LogRow key={i} entry={entry} />)

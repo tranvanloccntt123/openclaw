@@ -193,7 +193,7 @@ export class GatewayClient {
     const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
     const role = "operator";
     const clientId = "openclaw-control-ui";
-    const clientMode = "webchat";
+    const clientMode = "ui";
     let deviceIdentity: DeviceIdentity | null = null;
     let canFallbackToShared = false;
     let authToken = this.opts.token;

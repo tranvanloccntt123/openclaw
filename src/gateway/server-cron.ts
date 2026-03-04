@@ -511,10 +511,11 @@ export function buildGatewayCronService(params: {
   });
 
   registerInternalHook("message:received", async (evt) => {
+    const log = getChildLogger({ subsystem: "workflow" });
     if (!isMessageReceivedEvent(evt)) {
+      log.error(`[Workflow] not isMessageReceivedEvent`);
       return;
     }
-    const log = getChildLogger({ subsystem: "workflow" });
     try {
       const stateDir = resolveStateDir(process.env);
       const filePath = path.join(stateDir, "workflows", "workflows.json");

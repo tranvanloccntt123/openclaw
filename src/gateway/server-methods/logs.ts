@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { clamp } from "../../utils.js";
 import {
@@ -158,10 +159,20 @@ export const logsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const p = params as { cursor?: number; limit?: number; maxBytes?: number };
-    const configuredFile = getResolvedLoggerSettings().file;
+    const p = params as {
+      cursor?: number;
+      limit?: number;
+      maxBytes?: number;
+      target?: "main" | "cache-trace";
+    };
+    let targetFile = getResolvedLoggerSettings().file;
+
+    if (p.target === "cache-trace") {
+      targetFile = path.join(resolveStateDir(), "logs", "cache-trace.jsonl");
+    }
+
     try {
-      const file = await resolveLogFile(configuredFile);
+      const file = p.target === "cache-trace" ? targetFile : await resolveLogFile(targetFile);
       const result = await readLogSlice({
         file,
         cursor: p.cursor,
