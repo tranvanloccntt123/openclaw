@@ -199,6 +199,25 @@ function IconMcporter() {
   );
 }
 
+function IconPlugins() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      stroke="currentColor"
+    >
+      <path d="M12 2v5" />
+      <path d="M12 17v5" />
+      <path d="M5 12h-3" />
+      <path d="M22 12h-3" />
+      <circle cx="12" cy="12" r="5" />
+    </svg>
+  );
+}
+
 const NAV_GROUPS: NavGroup[] = [
   {
     label: "Main",
@@ -215,6 +234,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/channels", label: "Channels", icon: <IconChannels /> },
       { href: "/skills", label: "Skills", icon: <IconSkills /> },
       { href: "/workflows", label: "Workflows", icon: <IconWorkflows /> },
+      { href: "/plugins", label: "Plugins", icon: <IconPlugins /> },
       { href: "/cron", label: "Automations", icon: <IconCron /> },
       { href: "/mcporter", label: "MCPorter", icon: <IconMcporter /> },
       { href: "/config", label: "Config", icon: <IconConfig /> },

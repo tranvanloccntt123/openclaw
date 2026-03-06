@@ -423,7 +423,7 @@ export default function CronPage() {
     } finally {
       setLoading(false);
     }
-  }, [state, request, filter]);
+  }, [state, request]);
 
   const loadRuns = useCallback(
     async (jobId: string) => {

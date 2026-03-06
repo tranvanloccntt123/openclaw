@@ -373,7 +373,7 @@ function FileEditor({ agentId, fileName, filePath, onClose, onSaved, request }: 
       }
     }
     void loadFile();
-  }, [agentId, filePath, request]);
+  }, [agentId, fileName, filePath, request]);
 
   // Focus textarea after load
   useEffect(() => {
