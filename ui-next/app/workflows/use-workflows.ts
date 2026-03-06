@@ -1,6 +1,5 @@
 import { Node, Edge } from "@xyflow/react";
 import { useState, useEffect } from "react";
-import type { CronJobCreate } from "@/lib/types";
 import { useGateway } from "@/lib/use-gateway";
 
 export interface WorkflowItem {
@@ -60,58 +59,33 @@ export function useWorkflows() {
 
     const newCronJobIds: string[] = [];
 
-    // 2. Discover new trigger-action links and create cron jobs
+    // 2. Create ONE cron job per Cron trigger.
+    //    The backend executor will traverse the full workflow graph at runtime.
     const triggers = nodes.filter(
       (n) => n.type === "trigger" && n.data?.label === "Schedule (Cron)",
     );
     for (const trigger of triggers) {
-      const outgoingEdges = edges.filter((e) => e.source === trigger.id);
-      for (const edge of outgoingEdges) {
-        const actionNode = nodes.find((n) => n.id === edge.target);
-        if (actionNode && actionNode.data?.label === "AI Agent Prompt") {
-          const cronExpr = (trigger.data.cronExpr as string) || "* * * * *";
-          const agentId = (actionNode.data.agentId as string) || undefined;
-          const prompt = (actionNode.data.prompt as string) || "Ping from Workflow";
+      const cronExpr = (trigger.data.cronExpr as string) || "* * * * *";
 
-          const jobCreate: CronJobCreate = {
-            name: `Workflow: ${name}`,
-            description: `Generated from Workflow Editor (Node: ${trigger.id})`,
-            enabled: true,
-            agentId,
-            schedule: { kind: "cron", expr: cronExpr },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: prompt },
-          };
+      const jobCreate = {
+        name: `Workflow: ${name}`,
+        description: `Generated from Workflow Editor (trigger: ${trigger.id})`,
+        enabled: true,
+        schedule: { kind: "cron" as const, expr: cronExpr },
+        sessionTarget: "isolated" as const,
+        wakeMode: "now" as const,
+        payload: {
+          kind: "workflowRun" as const,
+          workflowId: id,
+          triggerId: trigger.id,
+        },
+      };
 
-          try {
-            const res = await request<{ id: string }>("cron.add", jobCreate);
-            newCronJobIds.push(res.id);
-          } catch (e) {
-            console.error("Failed to add cron job", e);
-          }
-        } else if (actionNode && actionNode.data?.label === "Send Message") {
-          const cronExpr = (trigger.data.cronExpr as string) || "* * * * *";
-          const body = (actionNode.data.body as string) || "Hello from workflow!";
-
-          const jobCreate: CronJobCreate = {
-            name: `Workflow: ${name}`,
-            description: `Generated from Workflow Editor (Node: ${trigger.id})`,
-            enabled: true,
-            schedule: { kind: "cron", expr: cronExpr },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            payload: { kind: "systemEvent", text: body },
-            delivery: { mode: "announce" },
-          };
-
-          try {
-            const res = await request<{ id: string }>("cron.add", jobCreate);
-            newCronJobIds.push(res.id);
-          } catch (e) {
-            console.error("Failed to add cron job for send message", e);
-          }
-        }
+      try {
+        const res = await request<{ id: string }>("cron.add", jobCreate);
+        newCronJobIds.push(res.id);
+      } catch (e) {
+        console.error("Failed to add workflow cron job", e);
       }
     }
 

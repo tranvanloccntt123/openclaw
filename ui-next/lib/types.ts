@@ -57,6 +57,8 @@ export type SessionsPatchResult = {
     verboseLevel?: string;
     reasoningLevel?: string;
     elevatedLevel?: string;
+    model?: string;
+    modelProvider?: string;
   };
 };
 
@@ -97,6 +99,22 @@ export type ConfigUiHints = Record<string, ConfigUiHint>;
 export type ConfigSchemaResponse = {
   schema?: unknown;
   hints?: ConfigUiHints;
+};
+
+// ============================================
+// Models
+// ============================================
+
+export type ModelCatalogEntry = {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow?: number;
+  reasoning?: boolean;
+};
+
+export type ModelsCatalogResult = {
+  models: ModelCatalogEntry[];
 };
 
 // ============================================

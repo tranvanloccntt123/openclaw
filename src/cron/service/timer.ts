@@ -965,9 +965,65 @@ export async function executeJobCore(
     }
   }
 
+  if (job.payload.kind === "workflowRun") {
+    const { workflowId, triggerId } = job.payload as {
+      kind: "workflowRun";
+      workflowId: string;
+      triggerId: string;
+    };
+    // Dynamically import to avoid circular deps at module load time
+    const [{ runWorkflowChain }, fs, path, { resolveStateDir }] = await Promise.all([
+      import("../../workflows/workflow-executor.js"),
+      import("node:fs"),
+      import("node:path"),
+      import("../../config/paths.js"),
+    ]);
+    const stateDir = resolveStateDir(process.env);
+    const workflowsFilePath = path.join(stateDir, "workflows", "workflows.json");
+    let workflowGraph: { id: string; name: string; nodes: unknown[]; edges: unknown[] } | undefined;
+    try {
+      if (fs.existsSync(workflowsFilePath)) {
+        const raw = JSON.parse(fs.readFileSync(workflowsFilePath, "utf-8")) as unknown[];
+        workflowGraph = (raw as Array<{ id: string }>).find((w) => w.id === workflowId) as
+          | typeof workflowGraph
+          | undefined;
+      }
+    } catch (err) {
+      return {
+        status: "error",
+        error: `workflow: failed to load workflows file: ${String(err)}`,
+      };
+    }
+    if (!workflowGraph) {
+      return { status: "error", error: `workflow: workflow not found: ${workflowId}` };
+    }
+    const chainResult = await runWorkflowChain({
+      graph: {
+        nodes: workflowGraph.nodes as import("../../workflows/workflow-executor.js").WorkflowNode[],
+        edges: workflowGraph.edges as import("../../workflows/workflow-executor.js").WorkflowEdge[],
+      },
+      triggerId,
+      workflowName: workflowGraph.name,
+      state,
+      cronJob: job,
+      abortSignal,
+    });
+    return {
+      status: chainResult.status,
+      error: chainResult.error,
+      summary: chainResult.summary,
+      delivered: chainResult.delivered,
+      deliveryAttempted: chainResult.deliveryAttempted,
+      model: chainResult.model,
+      provider: chainResult.provider,
+      usage: chainResult.usage,
+    };
+  }
+
   if (job.payload.kind !== "agentTurn") {
     return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
   }
+
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }

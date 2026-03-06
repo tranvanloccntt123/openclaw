@@ -55,6 +55,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { createFindTool, createGrepTool, createLsTool } from "./tools/fs-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -426,6 +427,12 @@ export function createOpenClawCodingTools(options?: {
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
         });
+
+  // Create filesystem tools (ls, find, grep)
+  const lsTool = createLsTool(workspaceRoot);
+  const findTool = createFindTool(workspaceRoot);
+  const grepTool = createGrepTool(workspaceRoot);
+
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
@@ -455,6 +462,10 @@ export function createOpenClawCodingTools(options?: {
     ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
     execTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
+    // Filesystem exploration tools
+    lsTool,
+    findTool,
+    grepTool,
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...listChannelAgentTools({ cfg: options?.config }),
     ...createOpenClawTools({

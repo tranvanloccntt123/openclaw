@@ -216,6 +216,18 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
                 value={(data.prompt as string) || ""}
                 onChange={(e) => handleChange("prompt", e.target.value)}
               />
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "var(--muted)",
+                  lineHeight: 1.5,
+                  marginTop: 4,
+                }}
+              >
+                💡 If connected to a previous node, its output will be automatically injected as{" "}
+                <code style={{ fontSize: 10 }}>&lt;previous_output&gt;</code> context before your
+                prompt.
+              </span>
             </div>
           </>
         )}
