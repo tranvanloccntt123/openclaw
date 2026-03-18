@@ -45,8 +45,9 @@ const initialNodes: Node[] = [
 
 const initialEdges: Edge[] = [];
 
-let id = 0;
-const getId = () => `dndnode_${id++}`;
+// Use timestamp + random for unique IDs to avoid duplicates when loading saved workflows
+let idCounter = 0;
+const getId = () => `dndnode_${Date.now()}_${idCounter++}`;
 
 function DnDFlow() {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);

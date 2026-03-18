@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import type { CliDeps } from "../../cli/deps.js";
+import { loadConfig } from "../../config/io.js";
 import type { OpenClawConfig, SupabaseWorkflowStep } from "../../config/types.js";
-import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent/run.js";
 import type { CronDelivery } from "../../cron/types.js";
+import { buildGatewayConnectionDetails } from "../../gateway/call.js";
+import { GatewayClient, type GatewayEventFrame } from "../../gateway/client.js";
 import { logInfo, logWarn, logDebug, logError } from "../../logger.js";
 import {
   createSupabaseClient,
@@ -16,13 +18,190 @@ import {
 } from "../supabase/client.js";
 
 /**
+ * Execute a chat.send request and wait for the response.
+ * This replaces runCronIsolatedAgentTurn to use the same semantics as UI chat.
+ */
+async function executeChatSendAndWait(params: {
+  sessionKey: string;
+  message: string;
+  timeoutMs?: number;
+}): Promise<{
+  outputText: string;
+  sessionId: string;
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
+}> {
+  const { sessionKey, message, timeoutMs = 120000 } = params;
+
+  // Get gateway URL
+  const gatewayDetails = buildGatewayConnectionDetails({ config: loadConfig() });
+  const gatewayUrl = gatewayDetails.url;
+  const token = gatewayDetails.token;
+
+  logDebug(`[workflow-chat] Connecting to gateway: ${gatewayUrl}`);
+  logDebug(`[workflow-chat] Session: ${sessionKey}`);
+  logDebug(`[workflow-chat] Message: ${message.substring(0, 100)}...`);
+
+  return new Promise((resolve, reject) => {
+    const client = new GatewayClient({
+      url: gatewayUrl,
+      token,
+      onHello: () => {
+        logDebug(`[workflow-chat] Connected, sending message...`);
+      },
+      onClose: (info) => {
+        logDebug(`[workflow-chat] Connection closed: ${info.code} - ${info.reason}`);
+        if (!responseReceived) {
+          reject(new Error(`Gateway connection closed: ${info.reason}`));
+        }
+      },
+      onEvent: (evt) => {
+        handleEvent(evt);
+      },
+    });
+
+    let responseReceived = false;
+    let accumulatedText = "";
+    let sessionId: string | undefined;
+    let usage: { input_tokens: number; output_tokens: number; total_tokens: number } | undefined;
+
+    const timeout = setTimeout(() => {
+      responseReceived = true;
+      client.stop();
+      if (accumulatedText) {
+        resolve({
+          outputText: accumulatedText,
+          sessionId: sessionId || "",
+          usage,
+        });
+      } else {
+        reject(new Error("Workflow chat.send timeout - no response received"));
+      }
+    }, timeoutMs);
+
+    function handleEvent(evt: GatewayEventFrame) {
+      if (evt.event === "chat") {
+        const payload = evt.payload as {
+          runId: string;
+          sessionKey: string;
+          state: "delta" | "final" | "aborted" | "error";
+          message?: unknown;
+          errorMessage?: string;
+          usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
+        };
+
+        if (payload.sessionKey !== sessionKey) {
+          return; // Ignore messages for other sessions
+        }
+
+        sessionId = payload.sessionKey;
+        usage = payload.usage;
+
+        if (payload.state === "delta") {
+          // Streaming text delta
+          const msg = payload.message as Record<string, unknown> | undefined;
+          const content = msg?.content;
+          let delta = "";
+          if (typeof content === "string") {
+            delta = content;
+          } else if (Array.isArray(content)) {
+            delta = (content as Array<{ type: string; text?: string }>)
+              .filter((b) => b.type === "text" && typeof b.text === "string")
+              .map((b) => b.text)
+              .join("");
+          } else if (typeof msg?.text === "string") {
+            delta = msg.text;
+          }
+          if (delta) {
+            accumulatedText += delta;
+            logDebug(`[workflow-chat] Delta: ${delta.substring(0, 50)}...`);
+          }
+        } else if (payload.state === "final") {
+          // Complete message
+          responseReceived = true;
+          clearTimeout(timeout);
+
+          const msg = payload.message as Record<string, unknown> | undefined;
+          if (msg) {
+            const content = msg.content;
+            if (typeof content === "string") {
+              accumulatedText = content;
+            } else if (Array.isArray(content)) {
+              accumulatedText = (content as Array<{ type: string; text: string }>)
+                .filter((b) => b.type === "text")
+                .map((b) => b.text)
+                .join("\n");
+            } else if (typeof msg.text === "string") {
+              accumulatedText = msg.text;
+            }
+          }
+
+          logInfo(`[workflow-chat] Final response: ${accumulatedText.substring(0, 100)}...`);
+          client.stop();
+
+          resolve({
+            outputText: accumulatedText,
+            sessionId: sessionKey,
+            usage,
+          });
+        } else if (payload.state === "aborted") {
+          responseReceived = true;
+          clearTimeout(timeout);
+          logWarn(`[workflow-chat] Response aborted`);
+          client.stop();
+          resolve({
+            outputText: accumulatedText,
+            sessionId: sessionKey,
+            usage,
+          });
+        } else if (payload.state === "error") {
+          responseReceived = true;
+          clearTimeout(timeout);
+          const errorMsg = payload.errorMessage || "Unknown error";
+          logWarn(`[workflow-chat] Error: ${errorMsg}`);
+          client.stop();
+          reject(new Error(`Workflow chat error: ${errorMsg}`));
+        }
+      }
+    }
+
+    // Start connection and send message
+    client.start();
+
+    // Wait for connection before sending
+    const sendMessage = async () => {
+      try {
+        // Wait a bit for connection to establish
+        await new Promise((res) => setTimeout(res, 1000));
+
+        const runId = crypto.randomUUID();
+        await client.request("chat.send", {
+          sessionKey,
+          message,
+          deliver: false,
+          idempotencyKey: runId,
+        });
+
+        logDebug(`[workflow-chat] Message sent, runId: ${runId}`);
+      } catch (err) {
+        clearTimeout(timeout);
+        client.stop();
+        reject(err);
+      }
+    };
+
+    // Schedule send after a short delay to allow connection to establish
+    setTimeout(() => sendMessage(), 500);
+  });
+}
+
+/**
  * Generate session key for workflow execution.
  * Format: agent:main:workflow:<workflow-name>
  * Replaces spaces with dashes in workflow name.
  */
 function generateWorkflowSessionKey(workflowName: string): string {
   const sanitizedName = workflowName.replace(/\s+/g, "-").toLowerCase();
-  return `agent:main:${sanitizedName}`;
+  return `agent:main:workflow:${sanitizedName}`;
 }
 
 /**
@@ -480,7 +659,6 @@ export class WorkflowExecutor {
     sessionKey: string;
     tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number };
   }> {
-    const sessionConfig = step.sessionConfig ?? { target: "isolated", contextMode: "minimal" };
     // Use step's agentId, or extract from session key, or default to "main"
     const agentId =
       step.agentId ?? this.extractAgentIdFromSessionKey(sessionInfo.sessionKey) ?? "main";
@@ -489,45 +667,18 @@ export class WorkflowExecutor {
       `[workflow:${context.workflowId}] Executing agent prompt for step ${step.nodeId} with agentId: ${agentId}`,
     );
 
-    // Create a temporary job object for the isolated agent runner
-    const now = Date.now();
-    const tempJob = {
-      id: `${context.workflowId}:${step.nodeId}`,
-      name: step.label,
-      agentId,
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "cron" as const, expr: "* * * * *", tz: "UTC" as const, staggerMs: 0 },
-      sessionTarget: "isolated" as const,
-      wakeMode: "now" as const,
-      sessionKey: sessionInfo.sessionKey,
-      state: {},
-      payload: {
-        kind: "agentTurn" as const,
-        message: prompt,
-        model: (sessionConfig as SessionConfig).model,
-        thinking: (sessionConfig as SessionConfig).thinking === "on" ? "enabled" : undefined,
-      },
-      delivery: {
-        mode: "none" as const,
-      },
-    } satisfies import("../../cron/types.js").CronJob;
-
     try {
-      const result = await runCronIsolatedAgentTurn({
-        cfg: this.config,
-        deps: this.deps,
-        job: tempJob,
-        message: prompt,
+      // Use chat.send approach instead of isolated agent turn
+      // This sends the message to the session and waits for AI response
+      const result = await executeChatSendAndWait({
         sessionKey: sessionInfo.sessionKey,
-        agentId,
+        message: prompt,
       });
 
       return {
-        output: result.outputText ?? result.summary,
-        sessionId: result.sessionId ?? sessionInfo.sessionId,
-        sessionKey: result.sessionKey ?? sessionInfo.sessionKey,
+        output: result.outputText,
+        sessionId: result.sessionId,
+        sessionKey: sessionInfo.sessionKey,
         tokenUsage: result.usage
           ? {
               inputTokens: result.usage.input_tokens ?? 0,
