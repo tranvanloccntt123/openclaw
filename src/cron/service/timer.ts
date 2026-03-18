@@ -5,7 +5,6 @@ import {
   executeWorkflowCronJob,
   type WorkflowCronJob,
 } from "../../infra/cron/server-cron.js";
-import { isCronSystemEvent } from "../../infra/heartbeat-events-filter.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
@@ -634,7 +633,7 @@ export async function onTimer(state: CronServiceState) {
         state.deps.log.debug({}, `cron: [ON-TIMER] No due jobs, rearming timer`);
         return [];
       }
-
+      const now = state.deps.nowMs();
       for (const job of due) {
         job.state.runningAtMs = now;
         job.state.lastError = undefined;
@@ -823,36 +822,6 @@ export async function onTimer(state: CronServiceState) {
   }
 }
 
-function findDueJobs(state: CronServiceState): CronJob[] {
-  if (!state.store) {
-    return [];
-  }
-  const now = state.deps.nowMs();
-
-  // 🔍 DEBUG LOG: Finding due jobs
-  state.deps.log.debug(
-    {
-      totalJobs: state.store.jobs.length,
-      nowMs: now,
-      nowIso: new Date(now).toISOString(),
-    },
-    `cron: [FIND-DUE-JOBS] Scanning for due jobs`,
-  );
-
-  const dueJobs = collectRunnableJobs(state, now);
-
-  // 🔍 DEBUG LOG: Due jobs result
-  state.deps.log.debug(
-    {
-      dueCount: dueJobs.length,
-      dueJobIds: dueJobs.map((j) => j.id),
-    },
-    `cron: [FIND-DUE-JOBS] Found ${dueJobs.length} due jobs`,
-  );
-
-  return dueJobs;
-}
-
 function isRunnableJob(params: {
   job: CronJob;
   nowMs: number;
@@ -967,9 +936,32 @@ function collectRunnableJobs(
       nowMs,
       skipJobIds: opts?.skipJobIds,
       skipAtIfAlreadyRan: opts?.skipAtIfAlreadyRan,
-      allowCronMissedRunByLastRun: opts?.allowCronMissedRunByLastRun,
-    }),
-  );
+    });
+
+    // Log why job is not runnable (only for enabled jobs)
+    if (!isRunnable && job.enabled) {
+      state.deps.log.debug(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          enabled: job.enabled,
+          scheduleKind: job.schedule.kind,
+          nextRunAtMs: job.state.nextRunAtMs,
+          runningAtMs: job.state.runningAtMs,
+          lastRunAtMs: job.state.lastRunAtMs,
+          lastRunStatus: job.state.lastRunStatus,
+          nowMs,
+          timeUntilDue:
+            typeof job.state.nextRunAtMs === "number" ? job.state.nextRunAtMs - nowMs : undefined,
+        },
+        `cron: [COLLECT-RUNNABLE] Job not runnable`,
+      );
+    }
+
+    return isRunnable;
+  });
+
+  return runnableJobs;
 }
 
 export async function runMissedJobs(

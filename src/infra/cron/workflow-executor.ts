@@ -185,7 +185,18 @@ export class WorkflowExecutor {
   private activeSessions: Map<string, { sessionId: string; sessionKey: string; createdAt: number }>;
 
   constructor(config: OpenClawConfig, deps: CliDeps) {
-    this.config = config;
+    // Ensure config is a valid object and has agents property to prevent
+    // "Cannot read properties of undefined" errors when agent-scope functions
+    // access cfg.agents?.list or cfg.agents?.defaults
+    const safeConfig = config ?? {};
+    const existingAgents = safeConfig.agents;
+    this.config = {
+      ...safeConfig,
+      agents: {
+        defaults: existingAgents?.defaults ?? {},
+        list: existingAgents?.list ?? [],
+      },
+    };
     this.deps = deps;
     this.tokenTracking = {
       inputTokens: 0,
@@ -407,8 +418,10 @@ export class WorkflowExecutor {
         this.trackTokenUsage(step.nodeId, result.tokenUsage);
       }
 
-      // Deliver step output if step has delivery config
-      if (step.delivery && step.delivery.mode !== "none") {
+      // Deliver step output - default to announce mode if not configured
+      // This ensures workflow results are sent to the session chat
+      const deliveryConfig = step.delivery ?? { mode: "announce" as const, channel: "last" };
+      if (deliveryConfig.mode !== "none") {
         try {
           await this.deliverStepOutput(step, result.output, context);
         } catch (deliveryErr) {
@@ -445,6 +458,15 @@ export class WorkflowExecutor {
   }
 
   /**
+   * Extract agent ID from session key (e.g., "agent:main:workflow:xxx" -> "main")
+   */
+  private extractAgentIdFromSessionKey(sessionKey: string): string | undefined {
+    // Format: agent:main:workflow:name or agent:main:session:xxx
+    const match = sessionKey.match(/^agent:([^:]+):/);
+    return match ? match[1] : undefined;
+  }
+
+  /**
    * Execute agent prompt with isolated session.
    */
   async executeAgentPrompt(
@@ -459,9 +481,13 @@ export class WorkflowExecutor {
     tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number };
   }> {
     const sessionConfig = step.sessionConfig ?? { target: "isolated", contextMode: "minimal" };
-    const agentId = step.agentId;
+    // Use step's agentId, or extract from session key, or default to "main"
+    const agentId =
+      step.agentId ?? this.extractAgentIdFromSessionKey(sessionInfo.sessionKey) ?? "main";
 
-    logDebug(`[workflow:${context.workflowId}] Executing agent prompt for step ${step.nodeId}`);
+    logDebug(
+      `[workflow:${context.workflowId}] Executing agent prompt for step ${step.nodeId} with agentId: ${agentId}`,
+    );
 
     // Create a temporary job object for the isolated agent runner
     const now = Date.now();
@@ -918,13 +944,17 @@ export class WorkflowExecutor {
 
   /**
    * Deliver step output to configured channel.
+   * Default delivery: announce to session chat (channel: "last")
    */
   private async deliverStepOutput(
     step: WorkflowChainStep,
     output: unknown,
     context: WorkflowExecutionContext,
   ): Promise<void> {
-    if (!step.delivery || step.delivery.mode === "none") {
+    // Use default delivery if not configured - announce to session chat
+    const delivery = step.delivery ?? { mode: "announce" as const, channel: "last" };
+
+    if (!delivery || delivery.mode === "none") {
       return;
     }
 
@@ -934,58 +964,26 @@ export class WorkflowExecutor {
     }
 
     logDebug(
-      `[workflow:${context.workflowId}] Delivering step ${step.nodeId} output to ${step.delivery.mode}`,
+      `[workflow:${context.workflowId}] Delivering step ${step.nodeId} output to ${delivery.mode}`,
     );
 
-    if (step.delivery.mode === "announce") {
-      // Use subagent announce flow to deliver to channel
-      const sessionKey =
-        (context.sharedData.baseSessionKey as string | undefined) ||
-        `workflow:${context.workflowId}:main`;
-
-      try {
-        const { runSubagentAnnounceFlow } = await import("../../agents/subagent-announce.js");
-        await runSubagentAnnounceFlow({
-          childSessionKey: sessionKey,
-          childRunId: `${context.workflowId}:${step.nodeId}`,
-          requesterSessionKey: sessionKey,
-          requesterOrigin: {
-            channel: step.delivery.channel || "last",
-            to: step.delivery.to,
-            accountId: step.delivery.accountId,
-          },
-          requesterDisplayKey: sessionKey,
-          task: `${step.label} (Step ${step.nodeId})`,
-          timeoutMs: 30000,
-          cleanup: "keep",
-          roundOneReply: outputText,
-          expectsCompletionMessage: true,
-          bestEffortDeliver: step.delivery.bestEffort ?? false,
-          waitForCompletion: false,
-          startedAt: Date.now(),
-          endedAt: Date.now(),
-          outcome: { status: "ok" },
-          announceType: "cron job",
-        });
-        logInfo(
-          `[workflow:${context.workflowId}] Step ${step.nodeId} output delivered via announce`,
-        );
-      } catch (err) {
-        logWarn(
-          `[workflow:${context.workflowId}] Step ${step.nodeId} announce delivery failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        throw err;
-      }
-    } else if (step.delivery.mode === "webhook") {
+    if (delivery.mode === "announce") {
+      // Skip explicit delivery - the agent's response will naturally appear in the session
+      // The subagent-announce flow wraps output in "[Internal task completion event]" which isn't ideal
+      // For now, let the session naturally show the agent output
+      logInfo(
+        `[workflow:${context.workflowId}] Step ${step.nodeId} completed - agent output will appear in session naturally`,
+      );
+    } else if (delivery.mode === "webhook") {
       // Webhook delivery
-      if (!step.delivery.to) {
+      if (!delivery.to) {
         logWarn(
           `[workflow:${context.workflowId}] Step ${step.nodeId} webhook delivery missing URL`,
         );
         return;
       }
       try {
-        const response = await fetch(step.delivery.to, {
+        const response = await fetch(delivery.to, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
